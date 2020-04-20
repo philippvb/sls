@@ -16,17 +16,20 @@ from haven import haven_chk as hc
 from haven import haven_jupyter as hj
 
 
-def trainval(exp_dict, savedir_base, datadir, reset=False, metrics_flag=True):
+def newminimum(exp_id, savedir_base, datadir, name, exp_dict, metrics_flag=True):
     # bookkeeping
     # ---------------
 
     # get experiment directory
-    exp_id = hu.hash_dict(exp_dict)
-    savedir = os.path.join(savedir_base, exp_id)
+    old_modeldir = os.path.join(savedir_base, exp_id)
+    savedir = os.path.join(savedir_base, exp_id, name)
 
-    if reset:
-        # delete and backup experiment
-        hc.delete_experiment(savedir, backup_flag=True)
+    old_exp_dict = hu.load_json(os.path.join(old_modeldir, 'exp_dict.json'))  
+
+    # TODO: compare exp dict for possible errors:
+    # optimizer have to be the same
+    # same network, dataset  
+    
     
     # create folder and save the experiment dictionary
     os.makedirs(savedir, exist_ok=True)
@@ -66,6 +69,7 @@ def trainval(exp_dict, savedir_base, datadir, reset=False, metrics_flag=True):
     # -----------
     model = models.get_model(exp_dict["model"],
                              train_set=train_set)
+
     # Choose loss and metric function
     loss_function = metrics.get_metric_function(exp_dict["loss_func"])
 
@@ -81,16 +85,26 @@ def trainval(exp_dict, savedir_base, datadir, reset=False, metrics_flag=True):
     score_list_path = os.path.join(savedir, 'score_list.pkl')
     opt_path = os.path.join(savedir, 'opt_state_dict.pth')
 
-    if os.path.exists(score_list_path):
-        # resume experiment
-        score_list = hu.load_pkl(score_list_path)
-        model.load_state_dict(torch.load(model_path))
-        opt.load_state_dict(torch.load(opt_path))
-        s_epoch = score_list[-1]['epoch'] + 1
-    else:
-        # restart experiment
-        score_list = []
-        s_epoch = 0
+
+    old_model_path = os.path.join(old_modeldir, 'model.pth')
+    old_score_list_path = os.path.join(old_modeldir, 'score_list.pkl')
+    old_opt_path = os.path.join(old_modeldir, 'opt_state_dict.pth')
+
+    score_list = hu.load_pkl(old_score_list_path)
+    model.load_state_dict(torch.load(old_model_path))
+    opt.load_state_dict(torch.load(old_opt_path))
+    s_epoch = score_list[-1]['epoch'] + 1
+
+
+    # save current model state for comparison
+    minimum = []
+
+    for param in model.parameters():
+        minimum.append(param.clone())
+
+    
+
+
 
     # Train & Val
     # ------------
@@ -100,14 +114,15 @@ def trainval(exp_dict, savedir_base, datadir, reset=False, metrics_flag=True):
         # Set seed
         np.random.seed(exp_dict['runs']+epoch)
         torch.manual_seed(exp_dict['runs']+epoch)
-        torch.cuda.manual_seed_all(exp_dict['runs']+epoch)
+        # torch.cuda.manual_seed_all(exp_dict['runs']+epoch) not needed since no cuda available
 
         score_dict = {"epoch": epoch}
 
         if metrics_flag:
             # 1. Compute train loss over train set
-            score_dict["train_loss"] = metrics.compute_metric_on_dataset(model, train_set,
-                                                metric_name=exp_dict["loss_func"])
+            score_dict["train_loss"] = metrics.compute_metric_on_dataset(model, train_set, metric_name='softmax_loss')
+            #                                    metric_name=exp_dict["loss_func"]) 
+            # TODO: which loss should be used? (normal or with reguralizer?)
 
             # 2. Compute val acc over val set
             score_dict["val_acc"] = metrics.compute_metric_on_dataset(model, val_set,
@@ -119,18 +134,12 @@ def trainval(exp_dict, savedir_base, datadir, reset=False, metrics_flag=True):
 
         s_time = time.time()
         for images,labels in tqdm.tqdm(train_loader):
-            # images, labels = images.cuda(), labels.cuda()
+            # images, labels = images.cuda(), labels.cuda() no cuda available
 
             opt.zero_grad()
-
-            if exp_dict["opt"]["name"] in exp_configs.ours_opt_list + ["l4"]:
-                closure = lambda : loss_function(model, images, labels, backwards=False)
-                opt.step(closure)
-
-            else:
-                loss = loss_function(model, images, labels)
-                loss.backward()
-                opt.step()
+            loss = loss_function(model, images, labels, minimum, 0.1) # just works for custom loss function
+            loss.backward()
+            opt.step()
 
         e_time = time.time()
 
@@ -151,8 +160,11 @@ def trainval(exp_dict, savedir_base, datadir, reset=False, metrics_flag=True):
         print("Saved: %s" % savedir)
 
 
-        for param in model.parameters():
-            print(param.size())
+        with torch.nograd():
+            print('Current distance: %f', metrics.computedistance(minimum, model))
+        
+
+
 
     print('Experiment completed')
 
@@ -161,35 +173,29 @@ def trainval(exp_dict, savedir_base, datadir, reset=False, metrics_flag=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-e', '--exp_group_list', nargs='+')
+    parser.add_argument('-n', '--name', required=True)
     parser.add_argument('-sb', '--savedir_base', required=True)
     parser.add_argument('-d', '--datadir', required=True)
-    parser.add_argument('-r', '--reset',  default=0, type=int)
-    parser.add_argument('-ei', '--exp_id', default=None)
+    parser.add_argument('-ei', '--exp_id', required=True)
+    parser.add_argument('-e', '--exp_group_list', nargs='+')
 
     args = parser.parse_args()
 
     # Collect experiments
-    # -------------------
-    if args.exp_id is not None:
-        # select one experiment
-        savedir = os.path.join(args.savedir_base, args.exp_id)
-        exp_dict = hu.load_json(os.path.join(savedir, 'exp_dict.json'))        
-        
-        exp_list = [exp_dict]
-        
-    else:
-        # select exp group
-        exp_list = []
-        for exp_group_name in args.exp_group_list:
-            exp_list += exp_configs.EXP_GROUPS[exp_group_name]
+    
+    # select exp group
+    exp_list = []
+    for exp_group_name in args.exp_group_list:
+        exp_list += exp_configs.EXP_GROUPS[exp_group_name]
+    
 
 
     # Run experiments
     # ----------------------------
     for exp_dict in exp_list:
         # do trainval
-        trainval(exp_dict=exp_dict,
+        newminimum(exp_id=args.exp_id,
                 savedir_base=args.savedir_base,
                 datadir=args.datadir,
-                reset=args.reset)
+                name=args.name,
+                exp_dict=exp_dict)

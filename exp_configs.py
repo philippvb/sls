@@ -32,12 +32,21 @@ run_list = [0,1,2,3,4]
 EXP_GROUPS = {
         "mnist":{"dataset":["mnist"],
             "model":["mlp"],
-            "loss_func": ["softmax_loss"],
-            "opt":[{"name":"sgd_armijo", "gamma":2}, {"name":"adam"}, ],
+            "loss_func": ["softmax_reguralized"],
+            "opt":[{"name":"sgd"}],
             "acc_func":["softmax_accuracy"],
             "batch_size":[128],
-            "max_epoch":[200],
-            "runs":[0]},
+            "max_epoch":[30],
+            "runs":[1]}
+}
+
+'''
+
+
+            --- Here are other models listed
+            ,
+        
+
         
         "cifar100":{"dataset":["cifar100"],
             "model":["resnet34_100"],
@@ -163,7 +172,15 @@ EXP_GROUPS = {
 
     #=========================================
 
+    
 
             }
 
+'''
+
 EXP_GROUPS = {k:hu.cartesian_exp_group(v) for k,v in EXP_GROUPS.items()}
+
+
+
+
+

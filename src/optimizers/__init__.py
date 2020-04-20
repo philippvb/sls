@@ -60,7 +60,7 @@ def get_optimizer(opt, params, n_batches_per_epoch=None):
         opt = torch.optim.Adagrad(params)
 
     elif opt_name == 'sgd':
-        opt = torch.optim.SGD(params, lr=1e-3)
+        opt = torch.optim.SGD(params, lr=1e-3) # just add momentum, default 0.9
 
     elif opt_name == 'adagrad':
         opt = torch.optim.Adagrad(params)

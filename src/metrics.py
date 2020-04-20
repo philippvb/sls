@@ -13,6 +13,9 @@ def get_metric_function(metric_name):
     elif metric_name == "softmax_loss":
         return softmax_loss
 
+    elif metric_name == "softmax_reguralized":
+        return softmax_reguralized
+
     elif metric_name == "logistic_loss":
         return logistic_loss
 
@@ -25,6 +28,12 @@ def get_metric_function(metric_name):
     elif metric_name == "squared_loss":
         return squared_loss
 
+
+
+def get_metric_with_distance(metric_name):
+    a=0
+
+
 @torch.no_grad()
 def compute_metric_on_dataset(model, dataset, metric_name):
     metric_function = get_metric_function(metric_name)
@@ -36,7 +45,7 @@ def compute_metric_on_dataset(model, dataset, metric_name):
 
     score_sum = 0.
     for images, labels in tqdm.tqdm(loader):
-        images, labels = images.cuda(), labels.cuda()
+        # images, labels = images.cuda(), labels.cuda()
 
         score_sum += metric_function(model, images, labels).item() * images.shape[0] 
             
@@ -53,6 +62,27 @@ def softmax_loss(model, images, labels, backwards=False):
         loss.backward()
 
     return loss
+
+
+def softmax_reguralized(model, images, labels, minimum, min_rate, backwards=False):
+    logits = model(images)
+    criterion = torch.nn.CrossEntropyLoss(reduction="mean")
+    loss = criterion(logits, labels.view(-1)) + min_rate * computedistance(minimum, model)
+
+    if backwards and loss.requires_grad:
+        loss.backward()
+
+    return loss
+
+
+def computedistance(minimum, model):
+    distance = 0
+    for minparam, param in zip(minimum, model.parameters()):
+        dif = minparam - param.data
+        distance += torch.sum(torch.mul(dif, dif))
+
+    return distance
+
 
 def logistic_loss(model, images, labels, backwards=False):
     logits = model(images)
